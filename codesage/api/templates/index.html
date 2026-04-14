@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeSage</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-light.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+<body>
+    <div id="app" class="app-shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-mark"><i class="fas fa-compass-drafting"></i></div>
+                <div>
+                    <h1>CodeSage</h1>
+                    <p>Multi-agent code review cockpit</p>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <button @click="switchMode('chat')" :class="['nav-btn', { active: activeMode === 'chat' }]">
+                    <i class="fas fa-comments"></i>
+                    <span>对话协作</span>
+                </button>
+                <button @click="switchMode('index')" :class="['nav-btn', { active: activeMode === 'index' }]">
+                    <i class="fas fa-database"></i>
+                    <span>知识库索引</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-panel">
+                <h2>建议尝试</h2>
+                <button @click="quickAction('请解释一下这个项目的主要 API 流程。')" class="quick-link">
+                    解释 API 流程
+                </button>
+                <button @click="quickAction('SupervisorAgent 在哪里定义？')" class="quick-link">
+                    查找定义位置
+                </button>
+                <button @click="quickAction('请重构当前项目中的 supervisor 路由逻辑。')" class="quick-link">
+                    发起代码修改
+                </button>
+            </div>
+
+            <div class="sidebar-panel observer-sidebar">
+                <div class="panel-row">
+                    <h2>运行观测</h2>
+                    <button class="mini-btn" @click="fetchRecentRuns">刷新</button>
+                </div>
+                <div v-if="recentRunsLoading" class="observer-empty">加载运行记录中...</div>
+                <div v-else-if="!recentRuns.length" class="observer-empty">暂无可观测的运行记录。</div>
+                <button
+                    v-for="run in recentRuns"
+                    :key="run.run_id"
+                    class="observer-run-link"
+                    @click="openObserver(run.run_id)"
+                >
+                    <div class="observer-run-head">
+                        <span>{{ run.route || 'chat' }}</span>
+                        <span class="observer-run-status">{{ formatRunStatus(run.status) }}</span>
+                    </div>
+                    <div class="observer-run-meta">{{ run.current_stage || 'accepted' }}</div>
+                    <div v-if="run.last_summary" class="observer-run-summary">{{ run.last_summary }}</div>
+                </button>
+            </div>
+
+            <div class="sidebar-footer">
+                <button @click="handleClearChat" class="danger-btn">
+                    <i class="fas fa-trash-alt"></i>
+                    <span>清空会话</span>
+                </button>
+            </div>
+        </aside>
+
+        <main class="main-panel">
+            <section v-if="activeMode === 'index'" class="settings-panel">
+                <div class="settings-hero">
+                    <div>
+                        <h2>知识库索引</h2>
+                        <p>支持上传文档，或为本地仓库建立索引；GitHub URLs are not supported yet.</p>
+                    </div>
+                    <div class="hero-badge">Index-first workflow</div>
+                </div>
+
+                <div class="settings-card">
+                    <h3><i class="fas fa-upload"></i> 上传文档</h3>
+                    <p>支持 PDF、Word 和文本文件。</p>
+                    <input
+                        type="file"
+                        ref="fileInput"
+                        @change="handleFileSelect"
+                        accept=".pdf,.doc,.docx,.txt"
+                        hidden
+                    >
+                    <div class="control-row">
+                        <button @click="$refs.fileInput.click()" class="primary-btn">
+                            <i class="fas fa-cloud-upload-alt"></i>
+                            选择文件
+                        </button>
+                        <div v-if="selectedFile" class="selection-pill">
+                            <i class="fas fa-file-lines"></i>
+                            {{ selectedFile.name }}
+                        </div>
+                    </div>
+                    <button v-if="selectedFile" @click="uploadDocument" class="secondary-btn" :disabled="isUploading">
+                        <i class="fas fa-upload"></i>
+                        <span v-if="isUploading">上传中...</span>
+                        <span v-else>开始上传</span>
+                    </button>
+                    <div v-if="uploadProgress" class="status-card">{{ uploadProgress }}</div>
+                </div>
+
+                <div class="settings-card">
+                    <h3><i class="fas fa-code-branch"></i> 索引本地仓库</h3>
+                    <p>请输入本地路径，例如 `D:\projects\my-repo`。</p>
+                    <div class="control-row stacked">
+                        <input
+                            v-model="repoUrl"
+                            type="text"
+                            class="repo-input"
+                            placeholder="请输入本地仓库路径"
+                        >
+                        <button @click="indexRepo" class="primary-btn" :disabled="isIndexing || !repoUrl">
+                            <i class="fas fa-magnifying-glass"></i>
+                            <span v-if="isIndexing">索引中...</span>
+                            <span v-else>开始索引</span>
+                        </button>
+                    </div>
+                    <div v-if="indexProgress" class="status-card">{{ indexProgress }}</div>
+                </div>
+            </section>
+
+            <section v-else class="chat-layout">
+                <header class="chat-header">
+                    <div class="chat-status">
+                        <span class="status-dot"></span>
+                        <span>{{ statusText }}</span>
+                    </div>
+                    <div class="header-actions">
+                        <button class="icon-btn" @click="openObserver()" title="运行观测">
+                            <i class="fas fa-wave-square"></i>
+                        </button>
+                        <button class="icon-btn" @click="showHelp = !showHelp" title="帮助">
+                            <i class="fas fa-circle-info"></i>
+                        </button>
+                    </div>
+                </header>
+
+                <div v-if="showHelp" class="help-panel">
+                    <div class="help-card">
+                        <h3>如何使用</h3>
+                        <p>对话模式会自动在代码审查、知识库问答、代码修改之间路由，并展示结构化时间线。</p>
+                    </div>
+                    <div class="help-card">
+                        <h3>索引模式</h3>
+                        <p>先为本地仓库或文档建立索引，再进行知识库问答，能获得更稳定的上下文召回。</p>
+                    </div>
+                </div>
+
+                <div v-if="observerOpen" class="observer-panel">
+                    <div class="panel-row observer-panel-header">
+                        <div>
+                            <h3>Agent Run 观测</h3>
+                            <p v-if="observerRun && observerRun.summary">Run ID: {{ observerRun.summary.run_id }}</p>
+                        </div>
+                        <button class="mini-btn" @click="closeObserver">关闭</button>
+                    </div>
+                    <div v-if="observerLoading" class="observer-empty">正在加载 run 详情...</div>
+                    <div v-else-if="observerError" class="observer-empty">{{ observerError }}</div>
+                    <div v-else-if="observerRun" class="observer-body">
+                        <div class="observer-grid">
+                            <div class="observer-stat">
+                                <span class="observer-stat-label">状态</span>
+                                <strong>{{ formatRunStatus(observerRun.summary.status) }}</strong>
+                            </div>
+                            <div class="observer-stat">
+                                <span class="observer-stat-label">Route</span>
+                                <strong>{{ observerRun.summary.route || '-' }}</strong>
+                            </div>
+                            <div class="observer-stat">
+                                <span class="observer-stat-label">Stage</span>
+                                <strong>{{ observerRun.summary.current_stage || '-' }}</strong>
+                            </div>
+                            <div class="observer-stat">
+                                <span class="observer-stat-label">Agent</span>
+                                <strong>{{ observerRun.summary.agent || '-' }}</strong>
+                            </div>
+                        </div>
+                        <div class="observer-meta-row">
+                            <span>创建: {{ formatRunTime(observerRun.summary.created_at) || '-' }}</span>
+                            <span>更新: {{ formatRunTime(observerRun.summary.updated_at) || '-' }}</span>
+                        </div>
+                        <div class="observer-meta-row">
+                            <span>Run 日志: {{ observerRun.workflow_log_path || observerRun.summary.workflow_log_path || '-' }}</span>
+                            <span>全局日志: {{ observerRun.global_workflow_log_path || '-' }}</span>
+                        </div>
+                        <div v-if="observerRun.parent_run" class="observer-section">
+                            <div class="observer-section-title">父运行</div>
+                            <button class="observer-run-link inline" @click="openRelatedObserver(observerRun.parent_run.run_id)">
+                                <div class="observer-run-head">
+                                    <span>{{ observerRun.parent_run.route || 'chat' }}</span>
+                                    <span class="observer-run-status">{{ formatRunStatus(observerRun.parent_run.status) }}</span>
+                                </div>
+                                <div class="observer-run-meta">{{ observerRun.parent_run.run_id }}</div>
+                                <div v-if="observerRun.parent_run.last_summary" class="observer-run-summary">
+                                    {{ observerRun.parent_run.last_summary }}
+                                </div>
+                            </button>
+                        </div>
+                        <div v-if="observerRun.child_runs && observerRun.child_runs.length" class="observer-section">
+                            <div class="observer-section-title">子运行</div>
+                            <div class="observer-child-grid">
+                                <button
+                                    v-for="childRun in observerRun.child_runs"
+                                    :key="childRun.run_id"
+                                    class="observer-run-link inline"
+                                    @click="openRelatedObserver(childRun.run_id)"
+                                >
+                                    <div class="observer-run-head">
+                                        <span>{{ childRun.route || 'child' }}</span>
+                                        <span class="observer-run-status">{{ formatRunStatus(childRun.status) }}</span>
+                                    </div>
+                                    <div class="observer-run-meta">{{ childRun.current_stage || '-' }}</div>
+                                    <div class="observer-run-summary">{{ childRun.run_id }}</div>
+                                </button>
+                            </div>
+                        </div>
+                        <div v-if="observerRun.related_run_ids && observerRun.related_run_ids.length" class="observer-section">
+                            <div class="observer-section-title">关联 Run</div>
+                            <div class="observer-related-list">
+                                <button
+                                    v-for="relatedRunId in observerRun.related_run_ids"
+                                    :key="relatedRunId"
+                                    class="mini-btn"
+                                    @click="openRelatedObserver(relatedRunId)"
+                                >
+                                    {{ relatedRunId }}
+                                </button>
+                            </div>
+                        </div>
+                        <div class="observer-section">
+                            <div class="observer-section-title">事件时间线</div>
+                            <div v-if="!observerEvents.length" class="observer-empty">还没有可展示的事件。</div>
+                            <div v-for="(event, eventIndex) in observerEvents" :key="`event-${eventIndex}`" class="observer-event">
+                                <div class="observer-event-head">
+                                    <strong>{{ event.stage || event.type || 'event' }}</strong>
+                                    <span>{{ formatRunStatus(event.status || event.type) }}</span>
+                                </div>
+                                <div v-if="event.summary" class="observer-event-summary">{{ event.summary }}</div>
+                                <div class="observer-event-meta">
+                                    <span v-if="event.agent">{{ event.agent }}</span>
+                                    <span v-if="event.tool">tool: {{ event.tool }}</span>
+                                    <span v-if="event.source_run_id">source: {{ event.source_run_id }}</span>
+                                    <button
+                                        v-if="event.source_run_id"
+                                        class="mini-btn"
+                                        @click="openRelatedObserver(event.source_run_id)"
+                                    >
+                                        查看子运行
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div v-if="observerToolCalls.length" class="observer-section">
+                            <div class="observer-section-title">工具调用</div>
+                            <div v-for="(toolCall, toolIndex) in observerToolCalls" :key="`tool-${toolIndex}`" class="observer-event">
+                                <div class="observer-event-head">
+                                    <strong>{{ toolCall.tool_name || toolCall.action || 'tool_call' }}</strong>
+                                    <span>{{ toolCall.hook_name || '-' }}</span>
+                                </div>
+                                <div class="observer-event-meta">
+                                    <span v-if="toolCall.agent">{{ toolCall.agent }}</span>
+                                    <span v-if="toolCall.error">error: {{ toolCall.error }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-container" ref="chatContainer">
+                    <div v-if="messages.length === 0" class="welcome-panel">
+                        <div class="welcome-mark"><i class="fas fa-sitemap"></i></div>
+                        <h2>可观测的多智能体协作</h2>
+                        <p>你可以直接提问、发起代码修改，或查看每一步路由与执行阶段。</p>
+                    </div>
+
+                    <div
+                        v-for="(msg, index) in messages"
+                        :key="index"
+                        :class="['message', msg.isUser ? 'user-message' : 'bot-message']"
+                    >
+                        <div class="message-bubble">
+                            <div v-if="!msg.isUser && msg.routeMeta" class="route-chip-row">
+                                <span class="route-chip">{{ msg.routeMeta.route || 'unknown' }}</span>
+                                <span class="route-chip muted">{{ msg.routeMeta.mode || 'flow' }}</span>
+                                <span class="route-chip muted">{{ msg.routeMeta.agent || 'agent' }}</span>
+                                <button v-if="msg.runId" class="route-chip action" @click="openObserver(msg.runId)">run</button>
+                            </div>
+
+                            <div v-if="!msg.isUser && msg.timeline && msg.timeline.length" class="timeline-card">
+                                <div class="timeline-title">执行时间线</div>
+                                <div v-for="(item, sIdx) in msg.timeline" :key="`${index}-${sIdx}`" class="timeline-item">
+                                    <span class="timeline-dot" :class="item.status"></span>
+                                    <div>
+                                        <div class="timeline-label">{{ item.label }}</div>
+                                        <div v-if="item.detail" class="timeline-detail">{{ item.detail }}</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div v-if="!msg.isUser && msg.confirmation" class="confirmation-card">
+                                <div class="confirmation-title">变更预览待确认</div>
+                                <div class="confirmation-section">
+                                    <strong>风险原因</strong>
+                                    <ul>
+                                        <li v-for="(reason, reasonIdx) in msg.confirmation.riskReasons" :key="`reason-${index}-${reasonIdx}`">
+                                            {{ reason }}
+                                        </li>
+                                    </ul>
+                                </div>
+                                <div class="confirmation-section">
+                                    <strong>待应用文件</strong>
+                                    <ul>
+                                        <li v-for="(file, fileIdx) in msg.confirmation.pendingChanges" :key="`file-${index}-${fileIdx}`">
+                                            {{ file }}
+                                        </li>
+                                    </ul>
+                                </div>
+                                <div v-if="msg.confirmation.diffSummary" class="confirmation-section">
+                                    <strong>Diff 摘要</strong>
+                                    <pre class="confirmation-diff">{{ msg.confirmation.diffSummary }}</pre>
+                                </div>
+                                <div class="confirmation-actions">
+                                    <button
+                                        class="secondary-btn"
+                                        :disabled="msg.confirmation.isSubmitting"
+                                        @click="handlePreviewDecision(index, 'reject')"
+                                    >
+                                        取消修改
+                                    </button>
+                                    <button
+                                        class="primary-btn"
+                                        :disabled="msg.confirmation.isSubmitting"
+                                        @click="handlePreviewDecision(index, 'approve')"
+                                    >
+                                        {{ msg.confirmation.isSubmitting ? '提交中...' : '确认应用' }}
+                                    </button>
+                                </div>
+                                <div v-if="msg.confirmation.error" class="message-error">
+                                    <i class="fas fa-triangle-exclamation"></i>
+                                    {{ msg.confirmation.error }}
+                                </div>
+                            </div>
+
+                            <div
+                                v-if="!msg.isUser && msg.state === 'thinking' && !msg.text"
+                                class="message-content thinking-content"
+                            >
+                                <div class="thinking-row">
+                                    <span class="thinking-spinner"></span>
+                                    <span>{{ msg.thinkingText || '处理中...' }}</span>
+                                </div>
+                            </div>
+                            <div
+                                v-else
+                                class="message-content"
+                                v-html="msg.isUser ? escapeHtml(msg.text) : parseMarkdown(msg.text)"
+                            ></div>
+                        </div>
+
+                        <div v-if="!msg.isUser && msg.state === 'error' && msg.error" class="message-error">
+                            <i class="fas fa-triangle-exclamation"></i>
+                            {{ msg.error }}
+                        </div>
+                    </div>
+                </div>
+
+                <footer class="composer-shell">
+                    <div class="composer">
+                        <button class="icon-btn secondary" @click="toggleCodeInput" title="切换到对话">
+                            <i class="fas fa-code"></i>
+                        </button>
+                        <textarea
+                            v-model="userInput"
+                            @keydown="handleKeyDown"
+                            @compositionstart="handleCompositionStart"
+                            @compositionend="handleCompositionEnd"
+                            @input="autoResize"
+                            :placeholder="inputPlaceholder"
+                            rows="1"
+                            ref="textarea"
+                        ></textarea>
+                        <button v-if="isLoading" @click="handleStop" class="send-btn stop-btn" title="停止">
+                            <i class="fas fa-stop"></i>
+                        </button>
+                        <button v-else @click="handleSend" class="send-btn" title="发送">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                    <p class="footer-note">当 Milvus 或模型服务不可用时，结果可能退化为基础响应。</p>
+                </footer>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

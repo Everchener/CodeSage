@@ -1,0 +1,88 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codesage"
+version = "0.1.0"
+description = "FastAPI-based multi-agent code review and codebase assistant"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "CodeSage Contributors" }
+]
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.0.0",
+    "openai>=1.30.0",
+    "pymilvus[model]>=2.4.0",
+    "langgraph>=0.1.0",
+    "langchain>=0.2.0",
+    "langchain-core>=0.2.0",
+    "langchain-community>=0.2.0",
+    "langchain-openai>=0.1.0",
+    "langchain-text-splitters>=0.2.0",
+    "transformers==4.30.2",
+    "typing-extensions>=4.0.0",
+    "python-dotenv>=1.0.0",
+    "python-multipart>=0.0.9",
+    "requests>=2.31.0",
+    "flake8>=7.0.0",
+    "markdown>=3.6",
+    "pdfminer.six>=20221105",
+    "pypdf>=5.0.0",
+    "python-docx>=1.1.0",
+    "python-pptx>=0.6.23",
+    "openpyxl>=3.1.0",
+    "pandas>=2.0.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=4.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+codesage = "codesage.api.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["codesage*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
+norecursedirs = [
+    ".git",
+    ".venv",
+    ".tmp*",
+    ".chrome-headless",
+    ".skill-selfcheck*",
+    ".pytest-tmp*",
+    "deepagents-main",
+    "mem0-main",
+    "ragflow-main",
+    "pytest-cache-files-*",
+    "skill-test-*",
+]
+markers = [
+    "unit: fast logic and schema validation tests",
+    "integration: tests that require a live Milvus instance",
+    "rag_eval: retrieval quality evaluation against golden query sets",
+]
